@@ -15,8 +15,9 @@ acciones laterales y una tarjeta de producto contextual.
 - Botón central de Lumo que abre un apartado independiente de conversación.
 - Sugerencias rápidas para consultar ventas, caja e inventario.
 - Cinco videos verticales en bucle, con pausa/reproducción y sonido activable.
-- Desplazamiento vertical que cambia producto y video.
-- Me gusta, comentarios y guardados con estado persistente.
+- Desplazamiento vertical animado con indicaciones para subir o bajar.
+- Precarga del video actual y los adyacentes para reducir tirones al navegar.
+- Me gusta, comentarios y guardados independientes para cada producto.
 - Compartir mediante el menú nativo del sistema (Android `ACTION_SEND`).
 - Carrito persistente con cantidades, subtotal, eliminar, vaciar y compartir.
 - Checkout local de demostración que registra la venta y descuenta inventario.

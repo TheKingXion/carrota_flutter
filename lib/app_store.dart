@@ -42,13 +42,25 @@ class AppStore extends ChangeNotifier {
   Future<void> _saveQueue = Future<void>.value();
   bool isResponding = false;
   bool dayClosed = false;
-  bool feedLiked = false;
-  bool feedSaved = false;
-  int feedLikeCount = 18;
-  final List<String> feedComments = [
-    "¿Tienen entrega disponible hoy?",
-    "Me interesa saber el precio por mayor.",
-  ];
+  final Set<String> likedFeedProducts = {};
+  final Set<String> savedFeedProducts = {};
+  final Map<String, int> feedLikeCounts = {
+    "tomate": 18,
+    "lechuga": 31,
+    "zanahoria": 24,
+    "cilantro": 15,
+    "espinaca": 27,
+  };
+  final Map<String, List<String>> feedCommentsByProduct = {
+    "tomate": [
+      "¿Tienen entrega disponible hoy?",
+      "Me interesa saber el precio por mayor.",
+    ],
+    "lechuga": ["Se ve muy fresca, ¿cuánto cuesta la caja?"],
+    "zanahoria": ["¿Venden por kilo y por saco?"],
+    "cilantro": ["¿Hay entrega temprano mañana?"],
+    "espinaca": ["¿Cuánto dura refrigerada?"],
+  };
   double? countedCash;
 
   Future<void> initialize() async {
@@ -789,21 +801,34 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  void toggleFeedLike() {
-    feedLiked = !feedLiked;
-    feedLikeCount += feedLiked ? 1 : -1;
+  bool isFeedLiked(String productId) => likedFeedProducts.contains(productId);
+
+  bool isFeedSaved(String productId) => savedFeedProducts.contains(productId);
+
+  int feedLikeCountFor(String productId) => feedLikeCounts[productId] ?? 0;
+
+  List<String> feedCommentsFor(String productId) =>
+      feedCommentsByProduct.putIfAbsent(productId, () => []);
+
+  void toggleFeedLike(String productId) {
+    final liked = likedFeedProducts.remove(productId);
+    if (!liked) likedFeedProducts.add(productId);
+    feedLikeCounts[productId] =
+        (feedLikeCounts[productId] ?? 0) + (liked ? -1 : 1);
     notifyListeners();
   }
 
-  void toggleFeedSaved() {
-    feedSaved = !feedSaved;
+  void toggleFeedSaved(String productId) {
+    if (!savedFeedProducts.remove(productId)) {
+      savedFeedProducts.add(productId);
+    }
     notifyListeners();
   }
 
-  void addFeedComment(String comment) {
+  void addFeedComment(String productId, String comment) {
     final value = comment.trim();
     if (value.isEmpty) return;
-    feedComments.add(value);
+    feedCommentsFor(productId).add(value);
     notifyListeners();
   }
 
@@ -843,7 +868,7 @@ class AppStore extends ChangeNotifier {
         };
 
     return {
-      "snapshotVersion": 1,
+      "snapshotVersion": 2,
       "profile": profile == null
           ? null
           : {
@@ -853,10 +878,10 @@ class AppStore extends ChangeNotifier {
               "currency": profile!.currency,
             },
       "dayClosed": dayClosed,
-      "feedLiked": feedLiked,
-      "feedSaved": feedSaved,
-      "feedLikeCount": feedLikeCount,
-      "feedComments": feedComments,
+      "likedFeedProducts": likedFeedProducts.toList(),
+      "savedFeedProducts": savedFeedProducts.toList(),
+      "feedLikeCounts": feedLikeCounts,
+      "feedCommentsByProduct": feedCommentsByProduct,
       "countedCash": countedCash,
       "proactiveSettings": proactiveSettings,
       "products": products
@@ -944,17 +969,56 @@ class AppStore extends ChangeNotifier {
           );
 
     dayClosed = snapshot["dayClosed"] == true;
-    feedLiked = snapshot["feedLiked"] == true;
-    feedSaved = snapshot["feedSaved"] == true;
-    feedLikeCount = (snapshot["feedLikeCount"] as num?)?.toInt() ?? 18;
-    final savedComments = _asList(snapshot["feedComments"])
-        .map((value) => value.toString())
-        .where((value) => value.isNotEmpty)
-        .toList();
-    if (savedComments.isNotEmpty) {
-      feedComments
+    final savedLikedProducts = _asList(snapshot["likedFeedProducts"]);
+    final savedSavedProducts = _asList(snapshot["savedFeedProducts"]);
+    likedFeedProducts
+      ..clear()
+      ..addAll(savedLikedProducts.map((value) => value.toString()));
+    savedFeedProducts
+      ..clear()
+      ..addAll(savedSavedProducts.map((value) => value.toString()));
+
+    final savedLikeCounts = _asMap(snapshot["feedLikeCounts"]);
+    if (savedLikeCounts != null) {
+      feedLikeCounts
         ..clear()
-        ..addAll(savedComments);
+        ..addEntries(
+          savedLikeCounts.entries.map(
+            (entry) => MapEntry(entry.key, (entry.value as num?)?.toInt() ?? 0),
+          ),
+        );
+    }
+
+    final savedCommentsByProduct = _asMap(
+      snapshot["feedCommentsByProduct"],
+    );
+    if (savedCommentsByProduct != null) {
+      feedCommentsByProduct
+        ..clear()
+        ..addEntries(
+          savedCommentsByProduct.entries.map(
+            (entry) => MapEntry(
+              entry.key,
+              _asList(entry.value)
+                  .map((value) => value.toString())
+                  .where((value) => value.isNotEmpty)
+                  .toList(),
+            ),
+          ),
+        );
+    } else {
+      // Migración del formato anterior, que guardaba una sola interacción.
+      if (snapshot["feedLiked"] == true) likedFeedProducts.add("tomate");
+      if (snapshot["feedSaved"] == true) savedFeedProducts.add("tomate");
+      feedLikeCounts["tomate"] =
+          (snapshot["feedLikeCount"] as num?)?.toInt() ?? 18;
+      final legacyComments = _asList(snapshot["feedComments"])
+          .map((value) => value.toString())
+          .where((value) => value.isNotEmpty)
+          .toList();
+      if (legacyComments.isNotEmpty) {
+        feedCommentsByProduct["tomate"] = legacyComments;
+      }
     }
     countedCash = _nullableDouble(snapshot["countedCash"]);
 

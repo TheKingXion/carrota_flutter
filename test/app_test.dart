@@ -47,9 +47,9 @@ void main() {
       ),
     );
     first.updatePrice("tomate", 45);
-    first.toggleFeedLike();
-    first.toggleFeedSaved();
-    first.addFeedComment("Comentario persistente");
+    first.toggleFeedLike("zanahoria");
+    first.toggleFeedSaved("lechuga");
+    first.addFeedComment("zanahoria", "Comentario persistente");
     expect(first.addToCart("lechuga"), isTrue);
     expect(first.addToCart("lechuga"), isTrue);
     await first.send("Vendí dos tomates");
@@ -66,10 +66,15 @@ void main() {
     expect(restored.productById("tomate")?.price, 45);
     expect(restored.productById("tomate")?.stock, 40);
     expect(restored.operationsToday, 13);
-    expect(restored.feedLiked, isTrue);
-    expect(restored.feedSaved, isTrue);
-    expect(restored.feedLikeCount, 19);
-    expect(restored.feedComments, contains("Comentario persistente"));
+    expect(restored.isFeedLiked("zanahoria"), isTrue);
+    expect(restored.isFeedLiked("tomate"), isFalse);
+    expect(restored.isFeedSaved("lechuga"), isTrue);
+    expect(restored.isFeedSaved("tomate"), isFalse);
+    expect(restored.feedLikeCountFor("zanahoria"), 25);
+    expect(
+      restored.feedCommentsFor("zanahoria"),
+      contains("Comentario persistente"),
+    );
     expect(restored.cartItemCount, 2);
     expect(restored.cartTotal, 56);
     first.dispose();
@@ -130,6 +135,7 @@ void main() {
     expect(find.text("Alertas"), findsOneWidget);
     expect(find.text("Guardar"), findsOneWidget);
     expect(find.text("Compartir"), findsOneWidget);
+    expect(find.text("Desliza hacia arriba"), findsOneWidget);
     expect(find.textContaining("Ya configuré"), findsNothing);
     expect(find.text("Tomate saladet"), findsOneWidget);
 
@@ -138,6 +144,11 @@ void main() {
     expect(store.cartItemCount, 1);
     expect(find.text("Carrito"), findsOneWidget);
 
+    await tester.tap(find.byIcon(Icons.favorite_border_rounded).first);
+    await tester.pump();
+    expect(store.isFeedLiked("tomate"), isTrue);
+    expect(store.isFeedLiked("lechuga"), isFalse);
+
     await tester.fling(
       find.byType(HomeScreen),
       const Offset(0, -500),
@@ -145,10 +156,12 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text("Lechuga italiana"), findsOneWidget);
+    expect(store.isFeedLiked("tomate"), isTrue);
+    expect(store.isFeedLiked("lechuga"), isFalse);
 
     await tester.tap(find.byIcon(Icons.mode_comment_rounded));
     await tester.pumpAndSettle();
-    expect(find.textContaining("Comentarios ("), findsOneWidget);
+    expect(find.textContaining("Comentarios de"), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.binding.setSurfaceSize(null);

@@ -37,11 +37,12 @@ class _HomeScreenState extends State<HomeScreen> {
     "assets/videos/citrus.mp4",
   ];
 
-  VideoPlayerController? _video;
-  var _videoReady = false;
+  late final PageController _pageController;
+  final Map<int, VideoPlayerController> _videos = {};
+  final Set<int> _readyVideos = {};
+  final Set<int> _loadingVideos = {};
   var _muted = true;
   var _feedIndex = 0;
-  var _videoGeneration = 0;
   String? _addedProduct;
   Timer? _addedTimer;
 
@@ -50,64 +51,106 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _loadVideo(0);
+    _pageController = PageController();
+    unawaited(_prepareVideosAround(0));
   }
 
-  Future<void> _loadVideo(int index) async {
-    final generation = ++_videoGeneration;
-    final previous = _video;
-    _video = null;
-    _videoReady = false;
-    await previous?.dispose();
+  Future<void> _prepareVideosAround(int index) async {
+    final indexes = <int>{
+      if (index > 0) index - 1,
+      index,
+      if (index < _videoAssets.length - 1) index + 1,
+    };
+    await Future.wait(indexes.map(_initializeVideo));
+    if (mounted) _disposeDistantVideos(_feedIndex);
+  }
+
+  Future<void> _initializeVideo(int index) async {
+    if (index < 0 || index >= _videoAssets.length) return;
+    if (_videos.containsKey(index) || !_loadingVideos.add(index)) return;
     final controller = VideoPlayerController.asset(
       _videoAssets[index % _videoAssets.length],
     );
-    _video = controller;
+    _videos[index] = controller;
     try {
       await controller.initialize();
       await controller.setLooping(true);
       await controller.setVolume(_muted ? 0 : 1);
-      await controller.play();
-      if (!mounted || generation != _videoGeneration) {
+      if (!mounted || _videos[index] != controller) {
         await controller.dispose();
         return;
       }
-      if (mounted) setState(() => _videoReady = true);
+      _readyVideos.add(index);
+      if (index == _feedIndex) {
+        await controller.play();
+      } else {
+        await controller.pause();
+      }
+      if (mounted) setState(() {});
     } catch (_) {
-      if (mounted && generation == _videoGeneration) {
-        setState(() => _videoReady = false);
+      if (_videos[index] == controller) {
+        _videos.remove(index);
+        _readyVideos.remove(index);
+      }
+      await controller.dispose();
+    } finally {
+      _loadingVideos.remove(index);
+    }
+  }
+
+  void _disposeDistantVideos(int center) {
+    final distant = _videos.keys
+        .where(
+          (index) =>
+              (index - center).abs() > 1 && !_loadingVideos.contains(index),
+        )
+        .toList();
+    for (final index in distant) {
+      final controller = _videos.remove(index);
+      _readyVideos.remove(index);
+      if (controller != null) unawaited(controller.dispose());
+    }
+  }
+
+  void _onPageChanged(int index) {
+    setState(() => _feedIndex = index);
+    for (final entry in _videos.entries) {
+      if (!_readyVideos.contains(entry.key)) continue;
+      if (entry.key == index) {
+        unawaited(entry.value.play());
+      } else {
+        unawaited(entry.value.pause());
       }
     }
+    unawaited(_prepareVideosAround(index));
   }
 
   @override
   void dispose() {
-    _videoGeneration++;
     _addedTimer?.cancel();
-    _video?.dispose();
+    _pageController.dispose();
+    for (final controller in _videos.values) {
+      unawaited(controller.dispose());
+    }
+    _videos.clear();
     super.dispose();
   }
 
   Future<void> _toggleMute() async {
-    final video = _video;
-    if (video == null) return;
     _muted = !_muted;
-    await video.setVolume(_muted ? 0 : 1);
+    await Future.wait(
+      _videos.entries
+          .where((entry) => _readyVideos.contains(entry.key))
+          .map((entry) => entry.value.setVolume(_muted ? 0 : 1)),
+    );
     if (mounted) setState(() {});
   }
 
   Future<void> _togglePlayback() async {
-    final video = _video;
-    if (!_videoReady || video == null) return;
+    final video = _videos[_feedIndex];
+    if (!_readyVideos.contains(_feedIndex) || video == null) return;
     video.value.isPlaying ? await video.pause() : await video.play();
     if (mounted) setState(() {});
-  }
-
-  void _moveFeed(int direction) {
-    final next = (_feedIndex + direction).clamp(0, 4);
-    if (next == _feedIndex) return;
-    setState(() => _feedIndex = next);
-    unawaited(_loadVideo(next));
   }
 
   void _addToCart(Product product) {
@@ -125,8 +168,12 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  Future<void> _showComments(BuildContext context) async {
+  Future<void> _showComments(
+    BuildContext context,
+    Product product,
+  ) async {
     final controller = TextEditingController();
+    final comments = store.feedCommentsFor(product.id);
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -154,11 +201,11 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 16),
               Text(
-                "Comentarios (${store.feedComments.length})",
+                "Comentarios de ${product.name} (${comments.length})",
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: 12),
-              ...store.feedComments.reversed.take(5).map(
+              ...comments.reversed.take(5).map(
                     (comment) => ListTile(
                       contentPadding: EdgeInsets.zero,
                       leading: const CircleAvatar(
@@ -185,7 +232,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     tooltip: "Publicar",
                     onPressed: () {
                       if (controller.text.trim().isEmpty) return;
-                      store.addFeedComment(controller.text);
+                      store.addFeedComment(product.id, controller.text);
                       Navigator.pop(context);
                     },
                     icon: const Icon(Icons.arrow_upward_rounded),
@@ -264,246 +311,273 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final feedProducts = store.products.take(5).toList();
-    final focus = feedProducts[_feedIndex % feedProducts.length];
 
     return Material(
       color: const Color(0xFF071711),
       child: SafeArea(
         bottom: false,
-        child: GestureDetector(
-          behavior: HitTestBehavior.translucent,
-          onTap: _togglePlayback,
-          onVerticalDragEnd: (details) {
-            final velocity = details.primaryVelocity ?? 0;
-            if (velocity < -180) _moveFeed(1);
-            if (velocity > 180) _moveFeed(-1);
-          },
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: _ImmersiveBackdrop(
-                  controller: _video,
-                  ready: _videoReady,
-                ),
+        child: Stack(
+          children: [
+            PageView.builder(
+              key: const ValueKey("vertical-product-feed"),
+              controller: _pageController,
+              scrollDirection: Axis.vertical,
+              physics: const BouncingScrollPhysics(
+                parent: AlwaysScrollableScrollPhysics(),
               ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(22, 18, 72, 24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const LumoMark(size: 35),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                store.businessName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              Text(
-                                "${store.ownerName} · datos locales",
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Color(0xBFFFFFFF),
-                                  fontSize: 11,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 104),
-                    Text(
-                      "Tu negocio,\nen movimiento.",
-                      style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                            color: Colors.white,
-                            fontFamily: "serif",
-                            fontSize: 43,
-                            height: .98,
-                            letterSpacing: -1.5,
-                          ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      "${AppStore.money(store.salesToday)} hoy · "
-                      "${store.operationsToday} operaciones",
-                      style: const TextStyle(
-                        color: Color(0xDFFFFFFF),
-                        fontSize: 14,
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    _FocusCard(
-                      product: focus,
-                      lowStock: store.lowStockProducts.isNotEmpty,
-                      onDetails: () => widget.onOpenProduct(focus.id),
-                      onAdd: () => _addToCart(focus),
-                    ),
-                    const SizedBox(height: 14),
-                    Wrap(
-                      spacing: 7,
-                      runSpacing: 7,
-                      children: [
-                        _QuickAction(
-                          label: "Alertas",
-                          onTap: () => _showAlerts(context),
-                        ),
-                        _QuickAction(
-                          label: "Recibir",
-                          onTap: widget.onOpenDelivery,
-                        ),
-                        _QuickAction(
-                            label: "Cierre", onTap: widget.onOpenClosing),
-                      ],
-                    ),
-                  ],
-                ),
+              itemCount: feedProducts.length,
+              onPageChanged: _onPageChanged,
+              itemBuilder: (context, index) => _buildFeedPage(
+                context,
+                product: feedProducts[index],
+                index: index,
+                total: feedProducts.length,
               ),
-              Positioned(
-                right: 12,
-                bottom: 28,
-                child: Column(
-                  children: [
-                    _ImmersiveAction(
-                      icon: store.feedLiked
-                          ? Icons.favorite_rounded
-                          : Icons.favorite_border_rounded,
-                      label: "${store.feedLikeCount}",
-                      active: store.feedLiked,
-                      onTap: store.toggleFeedLike,
-                    ),
-                    const SizedBox(height: 14),
-                    _ImmersiveAction(
-                      icon: Icons.mode_comment_rounded,
-                      label: "${store.feedComments.length}",
-                      onTap: () => _showComments(context),
-                    ),
-                    const SizedBox(height: 14),
-                    _ImmersiveAction(
-                      icon: store.feedSaved
-                          ? Icons.bookmark_rounded
-                          : Icons.bookmark_border_rounded,
-                      label: "Guardar",
-                      active: store.feedSaved,
-                      onTap: store.toggleFeedSaved,
-                    ),
-                    const SizedBox(height: 14),
-                    _CartAction(
-                      count: store.cartItemCount,
-                      onTap: () => showCartSheet(context, store),
-                    ),
-                    const SizedBox(height: 14),
-                    _ImmersiveAction(
-                      icon: Icons.arrow_outward_rounded,
-                      label: "Compartir",
-                      onTap: () => _share(context, focus),
-                    ),
-                  ],
-                ),
-              ),
-              Positioned(
-                right: 12,
-                top: 12,
-                child: IconButton.filled(
-                  tooltip: _muted ? "Activar sonido" : "Silenciar",
-                  onPressed: _toggleMute,
-                  style: IconButton.styleFrom(
-                    backgroundColor: const Color(0x990B1510),
-                    foregroundColor: Colors.white,
-                  ),
-                  icon: Icon(
-                    _muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-                  ),
-                ),
-              ),
-              Positioned(
-                left: 0,
-                right: 0,
-                top: 18,
-                child: IgnorePointer(
-                  child: Center(
-                    child: Text(
-                      "${_feedIndex + 1} / ${feedProducts.length}",
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              Positioned(
-                left: 14,
-                right: 14,
-                top: 64,
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 220),
-                  child: _addedProduct == null
-                      ? const SizedBox.shrink()
-                      : Material(
-                          key: ValueKey(_addedProduct),
-                          color: Colors.white,
-                          elevation: 10,
+            ),
+            Positioned(
+              left: 14,
+              right: 14,
+              top: 64,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                child: _addedProduct == null
+                    ? const SizedBox.shrink()
+                    : Material(
+                        key: ValueKey(_addedProduct),
+                        color: Colors.white,
+                        elevation: 10,
+                        borderRadius: BorderRadius.circular(18),
+                        child: InkWell(
                           borderRadius: BorderRadius.circular(18),
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(18),
-                            onTap: () => showCartSheet(context, store),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 11,
-                              ),
-                              child: Row(
-                                children: [
-                                  const CircleAvatar(
-                                    radius: 17,
-                                    backgroundColor: primarySoft,
-                                    child: Icon(
-                                      Icons.check_rounded,
-                                      color: primary,
-                                      size: 19,
+                          onTap: () => showCartSheet(context, store),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 11,
+                            ),
+                            child: Row(
+                              children: [
+                                const CircleAvatar(
+                                  radius: 17,
+                                  backgroundColor: primarySoft,
+                                  child: Icon(
+                                    Icons.check_rounded,
+                                    color: primary,
+                                    size: 19,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    "$_addedProduct se agregó al carrito",
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
                                     ),
                                   ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Text(
-                                      "$_addedProduct se agregó al carrito",
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
+                                ),
+                                const Text(
+                                  "Ver",
+                                  style: TextStyle(
+                                    color: primary,
+                                    fontWeight: FontWeight.w800,
                                   ),
-                                  const Text(
-                                    "Ver",
-                                    style: TextStyle(
-                                      color: primary,
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
                           ),
                         ),
+                      ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFeedPage(
+    BuildContext context, {
+    required Product product,
+    required int index,
+    required int total,
+  }) {
+    final comments = store.feedCommentsFor(product.id);
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _togglePlayback,
+            child: _ImmersiveBackdrop(
+              controller: _videos[index],
+              ready: _readyVideos.contains(index),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(22, 18, 72, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const LumoMark(size: 35),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          store.businessName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        Text(
+                          "${store.ownerName} · datos locales",
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xBFFFFFFF),
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 104),
+              Text(
+                "Tu negocio,\nen movimiento.",
+                style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                      color: Colors.white,
+                      fontFamily: "serif",
+                      fontSize: 43,
+                      height: .98,
+                      letterSpacing: -1.5,
+                    ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                "${AppStore.money(store.salesToday)} hoy · "
+                "${store.operationsToday} operaciones",
+                style: const TextStyle(
+                  color: Color(0xDFFFFFFF),
+                  fontSize: 14,
                 ),
+              ),
+              const SizedBox(height: 18),
+              _FocusCard(
+                product: product,
+                lowStock: product.stock <= product.averageDaily,
+                onDetails: () => widget.onOpenProduct(product.id),
+                onAdd: () => _addToCart(product),
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 7,
+                runSpacing: 7,
+                children: [
+                  _QuickAction(
+                    label: "Alertas",
+                    onTap: () => _showAlerts(context),
+                  ),
+                  _QuickAction(
+                    label: "Recibir",
+                    onTap: widget.onOpenDelivery,
+                  ),
+                  _QuickAction(label: "Cierre", onTap: widget.onOpenClosing),
+                ],
               ),
             ],
           ),
         ),
-      ),
+        Positioned(
+          right: 12,
+          bottom: 28,
+          child: Column(
+            children: [
+              _ImmersiveAction(
+                icon: store.isFeedLiked(product.id)
+                    ? Icons.favorite_rounded
+                    : Icons.favorite_border_rounded,
+                label: "${store.feedLikeCountFor(product.id)}",
+                active: store.isFeedLiked(product.id),
+                onTap: () => store.toggleFeedLike(product.id),
+              ),
+              const SizedBox(height: 14),
+              _ImmersiveAction(
+                icon: Icons.mode_comment_rounded,
+                label: "${comments.length}",
+                onTap: () => _showComments(context, product),
+              ),
+              const SizedBox(height: 14),
+              _ImmersiveAction(
+                icon: store.isFeedSaved(product.id)
+                    ? Icons.bookmark_rounded
+                    : Icons.bookmark_border_rounded,
+                label: "Guardar",
+                active: store.isFeedSaved(product.id),
+                onTap: () => store.toggleFeedSaved(product.id),
+              ),
+              const SizedBox(height: 14),
+              _CartAction(
+                count: store.cartItemCount,
+                onTap: () => showCartSheet(context, store),
+              ),
+              const SizedBox(height: 14),
+              _ImmersiveAction(
+                icon: Icons.arrow_outward_rounded,
+                label: "Compartir",
+                onTap: () => _share(context, product),
+              ),
+            ],
+          ),
+        ),
+        Positioned(
+          right: 12,
+          top: 12,
+          child: IconButton.filled(
+            tooltip: _muted ? "Activar sonido" : "Silenciar",
+            onPressed: _toggleMute,
+            style: IconButton.styleFrom(
+              backgroundColor: const Color(0x990B1510),
+              foregroundColor: Colors.white,
+            ),
+            icon: Icon(
+              _muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+            ),
+          ),
+        ),
+        Positioned(
+          left: 0,
+          right: 0,
+          top: 18,
+          child: IgnorePointer(
+            child: Center(
+              child: Text(
+                "${index + 1} / $total",
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          left: 16,
+          bottom: 18,
+          child: _SwipeHint(index: index, total: total),
+        ),
+      ],
     );
   }
 }
@@ -700,6 +774,56 @@ class _ImmersiveAction extends StatelessWidget {
           ),
         ],
       );
+}
+
+class _SwipeHint extends StatelessWidget {
+  const _SwipeHint({required this.index, required this.total});
+
+  final int index;
+  final int total;
+
+  @override
+  Widget build(BuildContext context) {
+    final atStart = index == 0;
+    final atEnd = index == total - 1;
+    final label = atStart
+        ? "Desliza hacia arriba"
+        : atEnd
+            ? "Desliza hacia abajo"
+            : "Desliza arriba o abajo";
+    final icon = atStart
+        ? Icons.keyboard_double_arrow_up_rounded
+        : atEnd
+            ? Icons.keyboard_double_arrow_down_rounded
+            : Icons.unfold_more_rounded;
+
+    return IgnorePointer(
+      child: Container(
+        key: const ValueKey("swipe-hint"),
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+        decoration: BoxDecoration(
+          color: const Color(0xA6192822),
+          border: Border.all(color: const Color(0x42FFFFFF)),
+          borderRadius: BorderRadius.circular(22),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: Colors.white, size: 17),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _CartAction extends StatelessWidget {
