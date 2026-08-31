@@ -1,5 +1,5 @@
 import "package:flutter/material.dart";
-import "package:flutter/services.dart";
+import "package:share_plus/share_plus.dart";
 
 import "app_store.dart";
 import "models.dart";
@@ -17,6 +17,10 @@ void showProductSheet(BuildContext context, AppStore store, String id) {
 
 void showShoppingSheet(BuildContext context, AppStore store) {
   showCarrotaSheet(context, _ShoppingSheet(store: store));
+}
+
+void showCartSheet(BuildContext context, AppStore store) {
+  showCarrotaSheet(context, _CartSheet(store: store));
 }
 
 void showDeliverySheet(
@@ -65,6 +69,238 @@ void showComingSoon(BuildContext context, String feature) {
       ),
     ),
   );
+}
+
+class _CartSheet extends StatefulWidget {
+  const _CartSheet({required this.store});
+
+  final AppStore store;
+
+  @override
+  State<_CartSheet> createState() => _CartSheetState();
+}
+
+class _CartSheetState extends State<_CartSheet> {
+  PaymentMethod payment = PaymentMethod.efectivo;
+  Sale? completedSale;
+
+  AppStore get store => widget.store;
+
+  Future<void> _share(BuildContext context) async {
+    final lines = store.cart.map((item) {
+      final product = store.productById(item.productId)!;
+      return "• ${product.name}: ${AppStore.number(item.quantity)} ${product.unit}";
+    }).join("\n");
+    final box = context.findRenderObject() as RenderBox?;
+    await SharePlus.instance.share(
+      ShareParams(
+        title: "Carrito de ${store.businessName}",
+        subject: "Mi carrito",
+        text:
+            "Mi carrito en ${store.businessName}\n$lines\nTotal: ${AppStore.money(store.cartTotal)}",
+        sharePositionOrigin:
+            box == null ? null : box.localToGlobal(Offset.zero) & box.size,
+      ),
+    );
+  }
+
+  void _checkout() {
+    final sale = store.checkoutCart(payment);
+    if (sale == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("No se pudo confirmar. Revisa el stock del carrito."),
+        ),
+      );
+      return;
+    }
+    setState(() => completedSale = sale);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (completedSale != null) {
+      return SheetScaffold(
+        title: "Pedido confirmado",
+        child: Column(
+          children: [
+            const CircleAvatar(
+              radius: 34,
+              backgroundColor: primarySoft,
+              child: Icon(Icons.check_rounded, size: 36, color: primary),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              "Pedido ${completedSale!.id.toUpperCase()}",
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              "Total ${AppStore.money(completedSale!.total)} · ${AppStore.paymentLabel(payment)}",
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              "Es una compra de demostración: se guardó localmente y actualizó el inventario.",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: mutedInk),
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text("Listo"),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return AnimatedBuilder(
+      animation: store,
+      builder: (context, _) => SheetScaffold(
+        title: "Tu carrito",
+        child: store.cart.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 34),
+                child: Center(
+                  child: Column(
+                    children: [
+                      Icon(Icons.shopping_bag_outlined,
+                          size: 48, color: mutedInk),
+                      SizedBox(height: 10),
+                      Text("Aún no agregas productos."),
+                    ],
+                  ),
+                ),
+              )
+            : Column(
+                children: [
+                  ...store.cart.map((item) {
+                    final product = store.productById(item.productId)!;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 46,
+                            height: 46,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: primarySoft,
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Text(product.emoji,
+                                style: const TextStyle(fontSize: 24)),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(product.name,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w700)),
+                                Text(
+                                  "${AppStore.money(product.price)} / ${product.unit}",
+                                  style: const TextStyle(
+                                      color: mutedInk, fontSize: 12),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: "Quitar uno",
+                            onPressed: () => store.updateCartQuantity(
+                              product.id,
+                              item.quantity - 1,
+                            ),
+                            icon: const Icon(Icons.remove_circle_outline),
+                          ),
+                          Text(
+                            AppStore.number(item.quantity),
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                          IconButton(
+                            tooltip: "Agregar uno",
+                            onPressed: item.quantity >= product.stock
+                                ? null
+                                : () => store.updateCartQuantity(
+                                      product.id,
+                                      item.quantity + 1,
+                                    ),
+                            icon: const Icon(Icons.add_circle_outline),
+                          ),
+                          IconButton(
+                            tooltip: "Eliminar",
+                            onPressed: () => store.removeFromCart(product.id),
+                            icon: const Icon(Icons.delete_outline_rounded),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                  const Divider(),
+                  Row(
+                    children: [
+                      const Expanded(child: Text("Subtotal")),
+                      Text(
+                        AppStore.money(store.cartTotal),
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<PaymentMethod>(
+                    initialValue: payment,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                        labelText: "Pago de demostración"),
+                    items: PaymentMethod.values
+                        .map(
+                          (method) => DropdownMenuItem(
+                            value: method,
+                            child: Text(AppStore.paymentLabel(method)),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) =>
+                        setState(() => payment = value ?? payment),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _checkout,
+                      icon: const Icon(Icons.lock_outline_rounded),
+                      label: Text(
+                          "Confirmar · ${AppStore.money(store.cartTotal)}"),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _share(context),
+                          icon: const Icon(Icons.ios_share_rounded),
+                          label: const Text("Compartir"),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: store.clearCart,
+                        child: const Text("Vaciar"),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
 }
 
 class _ProductSheet extends StatelessWidget {
@@ -328,6 +564,7 @@ class _DeliverySheetState extends State<_DeliverySheet> {
           const SizedBox(height: 12),
           DropdownButtonFormField<String>(
             initialValue: productId,
+            isExpanded: true,
             decoration: const InputDecoration(labelText: "Producto"),
             items: widget.store.products
                 .map(
@@ -468,15 +705,19 @@ class _ShoppingSheet extends StatelessWidget {
                 const SizedBox(width: 8),
                 OutlinedButton.icon(
                   onPressed: () async {
-                    await Clipboard.setData(ClipboardData(text: _shareText()));
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("Lista copiada")),
-                      );
-                    }
+                    final box = context.findRenderObject() as RenderBox?;
+                    await SharePlus.instance.share(
+                      ShareParams(
+                        title: "Compra para ${store.businessName}",
+                        text: _shareText(),
+                        sharePositionOrigin: box == null
+                            ? null
+                            : box.localToGlobal(Offset.zero) & box.size,
+                      ),
+                    );
                   },
-                  icon: const Icon(Icons.copy_rounded),
-                  label: const Text("Copiar"),
+                  icon: const Icon(Icons.ios_share_rounded),
+                  label: const Text("Compartir"),
                 ),
               ],
             ),

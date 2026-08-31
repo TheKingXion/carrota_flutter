@@ -2,15 +2,15 @@ import "dart:async";
 
 import "package:flutter/foundation.dart";
 
-import "ai_service.dart";
 import "local_database.dart";
+import "local_response_engine.dart";
 import "models.dart";
 
 class AppStore extends ChangeNotifier {
   AppStore({
-    AiService? aiService,
     this.persistence,
-  }) : aiService = aiService ?? AiService() {
+    LocalResponseEngine? responseEngine,
+  }) : responseEngine = responseEngine ?? const LocalResponseEngine() {
     _seedSales();
     shopping.addAll([
       ShoppingEntry(
@@ -33,18 +33,22 @@ class AppStore extends ChangeNotifier {
   }
 
   BusinessProfile? profile;
-  final AiService aiService;
+  final LocalResponseEngine responseEngine;
   final StatePersistence? persistence;
   bool initialized = false;
   bool persistenceReady = false;
   String? persistenceError;
   bool _persistenceEnabled = false;
   Future<void> _saveQueue = Future<void>.value();
-  AiProviderChoice aiProvider = AiProviderChoice.automatic;
-  bool isAiThinking = false;
-  String? lastAiProvider;
-  String? lastAiModel;
+  bool isResponding = false;
   bool dayClosed = false;
+  bool feedLiked = false;
+  bool feedSaved = false;
+  int feedLikeCount = 18;
+  final List<String> feedComments = [
+    "¿Tienen entrega disponible hoy?",
+    "Me interesa saber el precio por mayor.",
+  ];
   double? countedCash;
 
   Future<void> initialize() async {
@@ -170,6 +174,7 @@ class AppStore extends ChangeNotifier {
   final List<Sale> sales = [];
   final List<ChatMessage> chat = [];
   final List<ShoppingEntry> shopping = [];
+  final List<CartItem> cart = [];
 
   final List<MemoryEvent> memories = [
     const MemoryEvent(
@@ -231,6 +236,16 @@ class AppStore extends ChangeNotifier {
   double get expectedCash => paymentTotal(PaymentMethod.efectivo);
   double get cashDifference =>
       countedCash == null ? 0 : countedCash! - expectedCash;
+
+  int get cartItemCount => cart.fold<int>(
+        0,
+        (total, item) => total + item.quantity.round(),
+      );
+
+  double get cartTotal => cart.fold<double>(0, (total, item) {
+        final product = productById(item.productId);
+        return total + (product?.price ?? 0) * item.quantity;
+      });
 
   List<Product> get lowStockProducts => products
       .where((product) => product.stock <= product.averageDaily)
@@ -315,66 +330,41 @@ class AppStore extends ChangeNotifier {
 
     chat.add(ChatMessage(id: _id(), type: MessageType.user, text: text));
     final normalized = _normalize(text);
+    final isQuestion = text.contains("?") ||
+        RegExp(r"^(como|cuanto|que|cual|dime|hay)\b").hasMatch(normalized);
 
-    if (RegExp(r"vend|cobr|venta").hasMatch(normalized)) {
+    if (!isQuestion && RegExp(r"vend|cobr|venta").hasMatch(normalized)) {
       _handleSaleIntent(normalized);
     } else {
       notifyListeners();
-      await _askAi(text);
+      await _answerLocally(text);
       return;
     }
 
     notifyListeners();
   }
 
-  Future<void> _askAi(String message) async {
-    isAiThinking = true;
+  Future<void> _answerLocally(String message) async {
+    isResponding = true;
     notifyListeners();
-
-    try {
-      final reply = await aiService.ask(
-        message: message,
-        provider: aiProvider,
-        history: _aiHistory(),
-        business: businessSnapshot(),
-      );
-      lastAiProvider = reply.provider;
-      lastAiModel = reply.model;
-      chat.add(
-        ChatMessage(
-          id: _id(),
-          type: MessageType.text,
-          text: reply.text,
-          aiProvider: reply.provider,
-          aiModel: reply.model,
-        ),
-      );
-    } catch (error) {
-      chat.add(
-        ChatMessage(
-          id: _id(),
-          type: MessageType.text,
-          text:
-              "No pude conectar con la IA. Verifica que el backend esté encendido "
-              "y que la clave del proveedor esté configurada.\n\nDetalle: $error",
-        ),
-      );
-    } finally {
-      isAiThinking = false;
-      notifyListeners();
-    }
-  }
-
-  List<Map<String, String>> _aiHistory() {
-    final result = <Map<String, String>>[];
-    for (final message in chat.take(chat.length - 1)) {
-      if (message.text == null || message.text!.isEmpty) continue;
-      result.add({
-        "role": message.type == MessageType.user ? "user" : "assistant",
-        "content": message.text!,
-      });
-    }
-    return result.length <= 12 ? result : result.sublist(result.length - 12);
+    await Future<void>.delayed(const Duration(milliseconds: 220));
+    final reply = responseEngine.reply(
+      message,
+      LocalResponseContext(
+        ownerName: ownerName,
+        businessName: businessName,
+        sales: money(salesToday),
+        operations: operationsToday,
+        expectedCash: money(expectedCash),
+        lowStock: lowStockProducts.map((product) => product.name).toList(),
+        topProduct: topProduct.name,
+        shoppingItems: shopping.where((item) => item.selected).length,
+        dayClosed: dayClosed,
+      ),
+    );
+    chat.add(ChatMessage(id: _id(), type: MessageType.text, text: reply));
+    isResponding = false;
+    notifyListeners();
   }
 
   Map<String, Object?> businessSnapshot() {
@@ -415,13 +405,6 @@ class AppStore extends ChangeNotifier {
           .toList(),
     };
   }
-
-  void setAiProvider(AiProviderChoice provider) {
-    aiProvider = provider;
-    notifyListeners();
-  }
-
-  Future<AiHealth> checkAiHealth() => aiService.health();
 
   void _handleSaleIntent(String normalized) {
     final parsed = _parseSale(normalized);
@@ -650,6 +633,115 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  double cartQuantityFor(String productId) {
+    for (final item in cart) {
+      if (item.productId == productId) return item.quantity;
+    }
+    return 0;
+  }
+
+  bool addToCart(String productId, {double quantity = 1}) {
+    final product = productById(productId);
+    if (product == null || quantity <= 0) return false;
+    final next = cartQuantityFor(productId) + quantity;
+    if (next > product.stock) return false;
+    for (final item in cart) {
+      if (item.productId == productId) {
+        item.quantity = next;
+        notifyListeners();
+        return true;
+      }
+    }
+    cart.add(CartItem(productId: productId, quantity: quantity));
+    notifyListeners();
+    return true;
+  }
+
+  bool updateCartQuantity(String productId, double quantity) {
+    if (quantity <= 0) {
+      removeFromCart(productId);
+      return true;
+    }
+    final product = productById(productId);
+    if (product == null || quantity > product.stock) return false;
+    for (final item in cart) {
+      if (item.productId == productId) {
+        item.quantity = quantity;
+        notifyListeners();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void removeFromCart(String productId) {
+    cart.removeWhere((item) => item.productId == productId);
+    notifyListeners();
+  }
+
+  void clearCart() {
+    if (cart.isEmpty) return;
+    cart.clear();
+    notifyListeners();
+  }
+
+  Sale? checkoutCart(PaymentMethod method) {
+    if (cart.isEmpty) return null;
+    for (final item in cart) {
+      final product = productById(item.productId);
+      if (product == null || item.quantity > product.stock) return null;
+    }
+
+    final lines = cart
+        .map(
+          (item) => SaleLine(
+            productId: item.productId,
+            quantity: item.quantity,
+          ),
+        )
+        .toList();
+    final sale = Sale(
+      id: _id(),
+      lines: lines,
+      total: cartTotal,
+      time: _now(),
+      payment: method,
+    );
+    sales.add(sale);
+    for (final line in lines) {
+      productById(line.productId)!.stock -= line.quantity;
+    }
+    timeline.insert(
+      0,
+      TimelineEvent(
+        id: "cart-${sale.id}",
+        time: sale.time,
+        title: "Pedido de la tienda por ${money(sale.total)}.",
+        detail: "Pago de demostración con ${paymentLabel(method)}.",
+        tag: "Tienda",
+      ),
+    );
+    memories.insert(
+      0,
+      MemoryEvent(
+        id: "cart-memory-${sale.id}",
+        group: "Hoy",
+        when: sale.time,
+        title: "Confirmaste un pedido de ${money(sale.total)}.",
+        detail: lines
+            .map(
+              (line) =>
+                  "${number(line.quantity)} × ${productById(line.productId)?.name ?? ""}",
+            )
+            .join(", "),
+        kind: "Registrado",
+      ),
+    );
+    cart.clear();
+    notifyListeners();
+    return sale;
+  }
+
   void saveShoppingList() {
     final selected = shopping.where((item) => item.selected).length;
     timeline.insert(
@@ -694,6 +786,24 @@ class AppStore extends ChangeNotifier {
 
   void updateSetting(String key, bool value) {
     proactiveSettings[key] = value;
+    notifyListeners();
+  }
+
+  void toggleFeedLike() {
+    feedLiked = !feedLiked;
+    feedLikeCount += feedLiked ? 1 : -1;
+    notifyListeners();
+  }
+
+  void toggleFeedSaved() {
+    feedSaved = !feedSaved;
+    notifyListeners();
+  }
+
+  void addFeedComment(String comment) {
+    final value = comment.trim();
+    if (value.isEmpty) return;
+    feedComments.add(value);
     notifyListeners();
   }
 
@@ -742,10 +852,11 @@ class AppStore extends ChangeNotifier {
               "businessType": profile!.businessType,
               "currency": profile!.currency,
             },
-      "aiProvider": aiProvider.name,
-      "lastAiProvider": lastAiProvider,
-      "lastAiModel": lastAiModel,
       "dayClosed": dayClosed,
+      "feedLiked": feedLiked,
+      "feedSaved": feedSaved,
+      "feedLikeCount": feedLikeCount,
+      "feedComments": feedComments,
       "countedCash": countedCash,
       "proactiveSettings": proactiveSettings,
       "products": products
@@ -772,8 +883,6 @@ class AppStore extends ChangeNotifier {
               "sale": message.sale == null ? null : saleToJson(message.sale!),
               "items": message.items,
               "productId": message.productId,
-              "aiProvider": message.aiProvider,
-              "aiModel": message.aiModel,
               "confirmed": message.confirmed,
             },
           )
@@ -811,6 +920,14 @@ class AppStore extends ChangeNotifier {
             },
           )
           .toList(),
+      "cart": cart
+          .map(
+            (item) => {
+              "productId": item.productId,
+              "quantity": item.quantity,
+            },
+          )
+          .toList(),
     };
   }
 
@@ -826,14 +943,19 @@ class AppStore extends ChangeNotifier {
             currency: profileData["currency"]?.toString() ?? "MXN",
           );
 
-    aiProvider = _enumByName(
-      AiProviderChoice.values,
-      snapshot["aiProvider"]?.toString(),
-      AiProviderChoice.automatic,
-    );
-    lastAiProvider = snapshot["lastAiProvider"]?.toString();
-    lastAiModel = snapshot["lastAiModel"]?.toString();
     dayClosed = snapshot["dayClosed"] == true;
+    feedLiked = snapshot["feedLiked"] == true;
+    feedSaved = snapshot["feedSaved"] == true;
+    feedLikeCount = (snapshot["feedLikeCount"] as num?)?.toInt() ?? 18;
+    final savedComments = _asList(snapshot["feedComments"])
+        .map((value) => value.toString())
+        .where((value) => value.isNotEmpty)
+        .toList();
+    if (savedComments.isNotEmpty) {
+      feedComments
+        ..clear()
+        ..addAll(savedComments);
+    }
     countedCash = _nullableDouble(snapshot["countedCash"]);
 
     final settings = _asMap(snapshot["proactiveSettings"]);
@@ -913,8 +1035,6 @@ class AppStore extends ChangeNotifier {
                 .map((value) => value.toString())
                 .toList(),
             productId: item["productId"]?.toString(),
-            aiProvider: item["aiProvider"]?.toString(),
-            aiModel: item["aiModel"]?.toString(),
             confirmed: item["confirmed"] == true,
           );
         }),
@@ -963,6 +1083,20 @@ class AppStore extends ChangeNotifier {
             selected: item["selected"] != false,
           );
         }),
+      );
+
+    cart
+      ..clear()
+      ..addAll(
+        _asList(snapshot["cart"]).map((raw) {
+          final item = _asMap(raw)!;
+          return CartItem(
+            productId: item["productId"].toString(),
+            quantity: _toDouble(item["quantity"]),
+          );
+        }).where(
+          (item) => productById(item.productId) != null && item.quantity > 0,
+        ),
       );
   }
 
@@ -1094,8 +1228,19 @@ class AppStore extends ChangeNotifier {
     chat.add(ChatMessage(id: _id(), type: MessageType.text, text: text));
   }
 
-  static String money(num value) =>
-      "\$${value.toStringAsFixed(value % 1 == 0 ? 0 : 2)}";
+  static String money(num value) {
+    final fixed = value.toStringAsFixed(value % 1 == 0 ? 0 : 2);
+    final parts = fixed.split(".");
+    final digits = parts.first.replaceFirst("-", "");
+    final grouped = digits.replaceAllMapped(
+      RegExp(r"\B(?=(\d{3})+(?!\d))"),
+      (_) => ",",
+    );
+    final sign = value < 0 ? "-" : "";
+    final decimals = parts.length == 2 ? ".${parts.last}" : "";
+    return "\$$sign$grouped$decimals";
+  }
+
   static String number(num value) =>
       value.toStringAsFixed(value % 1 == 0 ? 0 : 1);
   static String paymentLabel(PaymentMethod method) => switch (method) {
@@ -1126,7 +1271,6 @@ class AppStore extends ChangeNotifier {
     unawaited(
       flushPersistence().whenComplete(() => persistence?.close()),
     );
-    aiService.dispose();
     super.dispose();
   }
 }

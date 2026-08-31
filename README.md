@@ -1,127 +1,122 @@
 # Carrota Flutter
 
-Demo móvil interactiva de Carrota/Lumo. Los datos iniciales de ventas e
-inventario son mock, pero los cambios se aplican realmente, quedan guardados
-en SQLite y las consultas generales reciben respuestas reales de OpenAI o
-DeepSeek.
+Demo móvil y offline para operar un pequeño negocio. El Inicio adopta un
+formato TikTok Shop: video vertical en reproducción, capas de información,
+acciones laterales y una tarjeta de producto contextual.
 
-## Lo que funciona
+## Qué funciona
 
-- Onboarding validado: responsable, negocio, tipo y moneda.
-- Registro y confirmación de ventas escritas.
-- Pagos en efectivo, tarjeta, transferencia o combinado.
-- Inventario, llegadas manuales, cambio de precios y lista de compra.
-- Métricas, actividad, memoria editable y cierre de caja.
-- Selector Automático, OpenAI o DeepSeek.
-- Persistencia SQLite local y versionada.
-- Cámara y micrófono siguen visibles, marcados como funciones futuras.
+- Onboarding con responsable, negocio, tipo y moneda.
+- Registro de ventas escribiendo frases en español.
+- Confirmación de efectivo, tarjeta, transferencia o pago combinado.
+- Inventario, llegadas, precios y compra sugerida.
+- Métricas, actividad, memoria y cierre de caja.
+- Asistente de respuestas fijas basado en los datos locales.
+- Botón central de Lumo que abre un apartado independiente de conversación.
+- Sugerencias rápidas para consultar ventas, caja e inventario.
+- Cinco videos verticales en bucle, con pausa/reproducción y sonido activable.
+- Desplazamiento vertical que cambia producto y video.
+- Me gusta, comentarios y guardados con estado persistente.
+- Compartir mediante el menú nativo del sistema (Android `ACTION_SEND`).
+- Carrito persistente con cantidades, subtotal, eliminar, vaciar y compartir.
+- Checkout local de demostración que registra la venta y descuenta inventario.
+- Producto superpuesto con detalle real y botón para agregar al carrito.
+- Persistencia SQLite automática y versionada.
+- Cámara y micrófono visibles como funciones futuras.
 
-Los datos sobreviven al cierre, reinicio y actualización de la app. Android los
-elimina si se desinstala Carrota o se usa “Borrar datos” desde los ajustes del
-sistema. Esta sigue siendo una demo local, no una base de datos remota.
+La app no llama a OpenAI, DeepSeek ni otro servicio de inteligencia artificial.
+Las consultas funcionan sin internet y no salen del dispositivo.
+
+Inicio está reservado al feed: no muestra el mensaje de configuración ni el
+chat del asistente. Los comentarios del video son independientes. Lumo se abre
+desde el botón central elevado de la barra inferior y tiene su propia pantalla,
+historial y campo de texto.
+
+## Preguntas locales reconocidas
+
+Puedes escribir variaciones de:
+
+- `¿Cómo va el negocio?`
+- `¿Cuánto vendí hoy?`
+- `¿Cuánto debería haber en caja?`
+- `¿Qué falta en inventario?`
+- `¿Cuál es el producto más vendido?`
+- `¿Cómo va la lista de compra?`
+- `¿El día está cerrado?`
+- `Ayuda`
+
+También puedes registrar ventas como:
+
+```text
+Vendí dos tomates y una lechuga
+```
+
+## Videos de la demo
+
+El feed usa cinco MP4 verticales optimizados en `assets/videos/`:
+
+- `fresh_fruit.mp4`
+- `lettuce.mp4`
+- `apples.mp4`
+- `lemons.mp4`
+- `citrus.mp4`
+
+Son clips de prueba descargados gratuitamente desde la colección vertical de
+[Mixkit Healthy Food](https://mixkit.co/free-stock-video/discover/healthy-food/?orientation=vertical),
+ofrecida sin marca de agua bajo las condiciones indicadas por Mixkit. Antes de
+publicar comercialmente, reemplázalos por contenido propio del negocio o valida
+la licencia vigente de cada clip. En Android se reproducen automáticamente, en
+bucle y silenciados; el botón superior activa el audio y tocar el video pausa o
+reanuda la reproducción.
 
 ## Persistencia local
 
-La base se crea automáticamente como `carrota_local.db` dentro del directorio
-privado de la aplicación. Guarda:
+SQLite crea `carrota_local.db` dentro del directorio privado de la app. Guarda:
 
 - Perfil y onboarding.
 - Productos, precios y stock.
-- Ventas y formas de pago.
-- Conversación e identificación del proveedor de IA.
+- Ventas y pagos.
+- Conversación local.
 - Memoria y actividad.
-- Lista de compra, ajustes y cierre de caja.
+- Compra sugerida, ajustes y cierre.
+- Carrito, cantidades y pedidos confirmados en la demo.
 
-El esquema actual usa una instantánea JSON transaccional en SQLite con versión
-de migración. La implementación está en `lib/local_database.dart`.
+Los datos sobreviven al cierre, reinicio y actualización. Android los elimina
+si desinstalas la app o usas “Borrar datos”.
 
-## 1. Configurar la IA
-
-Las claves viven en el backend y nunca dentro del APK:
-
-```powershell
-cd "C:\Users\Xion\Desktop\folders\Juan Proyectos\carrota_flutter\backend"
-Copy-Item .env.example .env
-notepad .env
-```
-
-Completa en `.env`:
-
-```text
-OPENAI_API_KEY=tu_clave_de_openai
-DEEPSEEK_API_KEY=tu_clave_de_deepseek
-```
-
-No compartas ese archivo ni lo subas a Git. Luego enciende el servidor:
-
-```powershell
-node server.mjs
-```
-
-Debe mostrar `Carrota AI backend: http://0.0.0.0:8787`. Puedes comprobarlo
-desde otro PowerShell:
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:8787/health
-```
-
-## 2. Ejecutar en el teléfono por Wi-Fi
-
-El PC y el teléfono deben estar en la misma red. Averigua la IPv4 del PC:
-
-```powershell
-ipconfig
-```
-
-Usa la IPv4 del adaptador Wi-Fi, no la IP del teléfono. Por ejemplo, si el PC
-es `192.168.100.20`:
+## Ejecutar
 
 ```powershell
 cd "C:\Users\Xion\Desktop\folders\Juan Proyectos\carrota_flutter"
-flutter devices
-flutter run -d "adb-ARGKUT3A10006196-Uz6WNY._adb-tls-connect._tcp" --dart-define=CARROTA_API_URL=http://192.168.100.20:8787
+flutter pub get
+flutter run -d windows
 ```
 
-Si Android abre la app pero la prueba de IA dice que no hay conexión, permite
-Node.js en el Firewall de Windows para redes privadas y confirma desde el
-navegador del teléfono que abre `http://IP_DEL_PC:8787/health`.
-
-## 3. Construir un APK de demo
-
-Con el backend encendido y sustituyendo la IP:
+Para ejecutar posteriormente en un teléfono conectado:
 
 ```powershell
-flutter build apk --debug --dart-define=CARROTA_API_URL=http://192.168.100.20:8787
+flutter devices
+flutter run -d "ID_DEL_TELEFONO"
 ```
 
-El archivo queda en:
+## Compilar APK sin instalar
+
+```powershell
+flutter build apk --debug
+```
+
+Resultado:
 
 ```text
 build\app\outputs\flutter-apk\app-debug.apk
 ```
-
-La IP queda incorporada en ese APK. Para publicar una versión release se debe
-desplegar el backend con HTTPS y usar su URL pública.
-
-## 4. Instalarlo tú mismo cuando conectes el teléfono
-
-Estos comandos no se ejecutan automáticamente:
-
-```powershell
-flutter devices
-flutter install -d "ID_DEL_TELEFONO"
-```
-
-También puedes copiar `app-debug.apk` al teléfono y abrirlo manualmente. Android
-puede pedir permiso para instalar aplicaciones desde esa fuente.
-
-La sincronización futura con una base remota está diseñada en
-`PLAN_API_SYNC.md`; todavía no modifica la persistencia local.
 
 ## Verificación
 
 ```powershell
 flutter analyze
 flutter test
-node --check backend\server.mjs
 ```
+
+La integración remota futura está separada en `PLAN_API_SYNC.md`. El backend
+experimental de etapas anteriores no está conectado a esta versión de Flutter.

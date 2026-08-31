@@ -1,13 +1,12 @@
 import "package:flutter/material.dart";
 
-import "ai_service.dart";
 import "app_store.dart";
 import "models.dart";
 import "theme.dart";
 import "widgets.dart";
 
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({
+class LegacyHomeScreen extends StatelessWidget {
+  const LegacyHomeScreen({
     super.key,
     required this.store,
     required this.onOpenProduct,
@@ -208,12 +207,12 @@ class HomeScreen extends StatelessWidget {
                         : "${store.lowStockProducts.first.name} requiere atención",
                     warning: store.lowStockProducts.isNotEmpty)),
             const SizedBox(width: 10),
-            Expanded(
+            const Expanded(
                 child: MetricCard(
-                    label: "IA",
-                    value: store.lastAiProvider ?? store.aiProvider.label,
-                    subtitle: store.lastAiModel ?? "Lista para responder",
-                    success: store.lastAiProvider != null)),
+                    label: "Asistente",
+                    value: "Local",
+                    subtitle: "Respuestas sin internet",
+                    success: true)),
           ]),
           const SizedBox(height: 20),
           const SectionLabel("Sugerencias"),
@@ -242,7 +241,7 @@ class HomeScreen extends StatelessWidget {
                       onOpenProduct: onOpenProduct),
                 )),
           ],
-          if (store.isAiThinking) ...[
+          if (store.isResponding) ...[
             const SizedBox(height: 8),
             const Row(
               children: [
@@ -323,10 +322,12 @@ class ChatMessageCard extends StatelessWidget {
       {super.key,
       required this.store,
       required this.message,
-      required this.onOpenProduct});
+      required this.onOpenProduct,
+      this.darkBackground = false});
   final AppStore store;
   final ChatMessage message;
   final ValueChanged<String> onOpenProduct;
+  final bool darkBackground;
 
   @override
   Widget build(BuildContext context) {
@@ -404,23 +405,22 @@ class ChatMessageCard extends StatelessWidget {
           ),
         );
       case MessageType.text:
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 3),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                message.text ?? "",
-                style: Theme.of(context).textTheme.bodyLarge,
-              ),
-              if (message.aiProvider != null) ...[
-                const SizedBox(height: 6),
-                TagChip(
-                  "${message.aiProvider} · ${message.aiModel}",
-                  tone: TagTone.ai,
+        return Container(
+          padding: darkBackground
+              ? const EdgeInsets.symmetric(horizontal: 13, vertical: 10)
+              : const EdgeInsets.symmetric(vertical: 3),
+          decoration: darkBackground
+              ? BoxDecoration(
+                  color: const Color(0x2EFFFFFF),
+                  border: Border.all(color: const Color(0x3DFFFFFF)),
+                  borderRadius: BorderRadius.circular(16),
+                )
+              : null,
+          child: Text(
+            message.text ?? "",
+            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                  color: darkBackground ? Colors.white : ink,
                 ),
-              ],
-            ],
           ),
         );
       case MessageType.user:
@@ -641,6 +641,22 @@ class TodayScreen extends StatelessWidget {
               trailing: const Icon(Icons.chevron_right),
             ),
           ),
+          if (store.chat.isNotEmpty) ...[
+            const SizedBox(height: 18),
+            const SectionLabel("Asistente local"),
+            const SizedBox(height: 8),
+            ...store.chat.reversed.take(4).toList().reversed.map(
+                  (message) => Padding(
+                    padding: const EdgeInsets.only(bottom: 9),
+                    child: ChatMessageCard(
+                      store: store,
+                      message: message,
+                      onOpenProduct: (_) {},
+                    ),
+                  ),
+                ),
+            if (store.isResponding) const LinearProgressIndicator(minHeight: 2),
+          ],
           const SizedBox(height: 18),
           const SectionLabel("Actividad reciente"),
           const SizedBox(height: 8),
@@ -938,9 +954,21 @@ class BusinessScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 18),
-          const SectionLabel("Inteligencia artificial"),
+          const SectionLabel("Asistente local"),
           const SizedBox(height: 8),
-          _AiSettings(store: store),
+          const Card(
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: primarySoft,
+                child: Icon(Icons.offline_bolt_rounded, color: primary),
+              ),
+              title: Text("Respuestas fijas activas"),
+              subtitle: Text(
+                "Funciona sin internet y consulta únicamente los datos guardados en este dispositivo.",
+              ),
+              trailing: TagChip("Local", tone: TagTone.ok),
+            ),
+          ),
           const SizedBox(height: 18),
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             const SectionLabel("Productos"),
@@ -1018,7 +1046,7 @@ class BusinessScreen extends StatelessWidget {
                   trailing: const Icon(Icons.chevron_right)),
               ListTile(
                   onTap: () => _showInfo(context, "Datos y privacidad",
-                      "Los datos del negocio son mock y viven en memoria. Las claves de OpenAI y DeepSeek permanecen en el backend, nunca en la app."),
+                      "Los datos de esta demo se guardan en SQLite dentro del dispositivo. El asistente funciona localmente y no envía conversaciones a servicios de IA."),
                   title: const Text("Datos y privacidad"),
                   trailing: const Icon(Icons.chevron_right)),
             ]),
@@ -1058,87 +1086,4 @@ class _SettingSwitch extends StatelessWidget {
       value: value,
       onChanged: onChanged,
       title: Text(label, style: const TextStyle(fontSize: 14)));
-}
-
-class _AiSettings extends StatefulWidget {
-  const _AiSettings({required this.store});
-
-  final AppStore store;
-
-  @override
-  State<_AiSettings> createState() => _AiSettingsState();
-}
-
-class _AiSettingsState extends State<_AiSettings> {
-  AiHealth? health;
-  var checking = false;
-
-  Future<void> _check() async {
-    setState(() => checking = true);
-    final result = await widget.store.checkAiHealth();
-    if (mounted) {
-      setState(() {
-        health = result;
-        checking = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final store = widget.store;
-    final status = health == null
-        ? "Comprueba el backend antes de la demo."
-        : !health!.reachable
-            ? "Backend sin conexión"
-            : "OpenAI ${health!.openaiConfigured ? "lista" : "sin clave"} · "
-                "DeepSeek ${health!.deepseekConfigured ? "lista" : "sin clave"}";
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "Proveedor de respuestas",
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 10),
-            SegmentedButton<AiProviderChoice>(
-              segments: AiProviderChoice.values
-                  .map(
-                    (provider) => ButtonSegment(
-                      value: provider,
-                      label: Text(
-                        provider == AiProviderChoice.automatic
-                            ? "Auto"
-                            : provider.label,
-                      ),
-                    ),
-                  )
-                  .toList(),
-              selected: {store.aiProvider},
-              onSelectionChanged: (selection) =>
-                  store.setAiProvider(selection.first),
-              showSelectedIcon: false,
-            ),
-            const SizedBox(height: 10),
-            Text(status, style: Theme.of(context).textTheme.bodySmall),
-            const SizedBox(height: 6),
-            TextButton.icon(
-              onPressed: checking ? null : _check,
-              icon: checking
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.wifi_tethering_rounded),
-              label: const Text("Probar conexión"),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }

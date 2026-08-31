@@ -1,7 +1,7 @@
 import "package:carrota_flutter/app_store.dart";
 import "package:carrota_flutter/app.dart";
-import "package:carrota_flutter/ai_service.dart";
 import "package:carrota_flutter/local_database.dart";
+import "package:carrota_flutter/immersive_home.dart";
 import "package:carrota_flutter/main.dart";
 import "package:carrota_flutter/models.dart";
 import "package:carrota_flutter/widgets.dart";
@@ -24,15 +24,13 @@ void main() {
     store.dispose();
   });
 
-  test("envía consultas reales al proveedor de IA seleccionado", () async {
-    final store = AppStore(aiService: _FakeAiService());
-    store.setAiProvider(AiProviderChoice.deepseek);
+  test("responde localmente usando los datos del negocio", () async {
+    final store = AppStore();
 
     await store.send("¿Cómo va mi negocio?");
 
-    expect(store.chat.last.text, contains("respuesta real"));
-    expect(store.chat.last.aiProvider, "deepseek");
-    expect(store.lastAiModel, "deepseek-v4-flash");
+    expect(store.chat.last.text, contains("12 operaciones"));
+    expect(store.chat.last.text, contains(r"$2,430"));
     store.dispose();
   });
 
@@ -49,6 +47,11 @@ void main() {
       ),
     );
     first.updatePrice("tomate", 45);
+    first.toggleFeedLike();
+    first.toggleFeedSaved();
+    first.addFeedComment("Comentario persistente");
+    expect(first.addToCart("lechuga"), isTrue);
+    expect(first.addToCart("lechuga"), isTrue);
     await first.send("Vendí dos tomates");
     final proposal =
         first.chat.lastWhere((message) => message.type == MessageType.sale);
@@ -63,6 +66,12 @@ void main() {
     expect(restored.productById("tomate")?.price, 45);
     expect(restored.productById("tomate")?.stock, 40);
     expect(restored.operationsToday, 13);
+    expect(restored.feedLiked, isTrue);
+    expect(restored.feedSaved, isTrue);
+    expect(restored.feedLikeCount, 19);
+    expect(restored.feedComments, contains("Comentario persistente"));
+    expect(restored.cartItemCount, 2);
+    expect(restored.cartTotal, 56);
     first.dispose();
     restored.dispose();
   });
@@ -91,6 +100,77 @@ void main() {
     await tester.binding.setSurfaceSize(null);
   });
 
+  testWidgets("muestra el inicio inmersivo después del onboarding", (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    final store = AppStore();
+    store.completeOnboarding(
+      const BusinessProfile(
+        ownerName: "Jorge",
+        businessName: "Carrota",
+        businessType: "Verdulería",
+        currency: "CLP",
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomeScreen(
+          store: store,
+          onOpenProduct: (_) {},
+          onOpenDelivery: () {},
+          onOpenClosing: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text("Tu negocio,\nen movimiento."), findsOneWidget);
+    expect(find.text("Agregar"), findsOneWidget);
+    expect(find.text("Alertas"), findsOneWidget);
+    expect(find.text("Guardar"), findsOneWidget);
+    expect(find.text("Compartir"), findsOneWidget);
+    expect(find.textContaining("Ya configuré"), findsNothing);
+    expect(find.text("Tomate saladet"), findsOneWidget);
+
+    await tester.tap(find.text("Agregar"));
+    await tester.pump();
+    expect(store.cartItemCount, 1);
+    expect(find.text("Carrito"), findsOneWidget);
+
+    await tester.fling(
+      find.byType(HomeScreen),
+      const Offset(0, -500),
+      1000,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text("Lechuga italiana"), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.mode_comment_rounded));
+    await tester.pumpAndSettle();
+    expect(find.textContaining("Comentarios ("), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.binding.setSurfaceSize(null);
+  });
+
+  test("confirma un carrito y actualiza inventario", () {
+    final store = AppStore();
+    expect(store.addToCart("tomate", quantity: 2), isTrue);
+    expect(store.addToCart("lechuga"), isTrue);
+    expect(store.cartTotal, 88);
+
+    final sale = store.checkoutCart(PaymentMethod.transferencia);
+
+    expect(sale?.total, 88);
+    expect(sale?.payment, PaymentMethod.transferencia);
+    expect(store.cart, isEmpty);
+    expect(store.productById("tomate")?.stock, 40);
+    expect(store.productById("lechuga")?.stock, 3);
+    expect(store.timeline.first.tag, "Tienda");
+    store.dispose();
+  });
+
   testWidgets("mantiene los paneles inferiores dentro del teléfono", (
     tester,
   ) async {
@@ -115,7 +195,7 @@ void main() {
     await tester.tap(find.text("Empezar"));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.camera_alt_outlined));
+    await tester.tap(find.text("Recibir"));
     await tester.pumpAndSettle();
     await tester.pump(const Duration(seconds: 1));
     await tester.pumpAndSettle();
@@ -130,30 +210,46 @@ void main() {
 
     await tester.binding.setSurfaceSize(null);
   });
-}
 
-class _FakeAiService extends AiService {
-  @override
-  Future<AiReply> ask({
-    required String message,
-    required AiProviderChoice provider,
-    required List<Map<String, String>> history,
-    required Map<String, Object?> business,
-  }) async {
-    return const AiReply(
-      text: "Esta es una respuesta real de prueba.",
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
+  testWidgets("abre Lumo como apartado y responde localmente", (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    final store = AppStore();
+    store.completeOnboarding(
+      const BusinessProfile(
+        ownerName: "Jorge",
+        businessName: "Carrota",
+        businessType: "Verdulería",
+        currency: "CLP",
+      ),
     );
-  }
 
-  @override
-  Future<AiHealth> health() async => const AiHealth(
-        reachable: true,
-        openaiConfigured: true,
-        deepseekConfigured: true,
-      );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LumoScreen(
+          store: store,
+          onSend: store.send,
+          onOpenProduct: (_) {},
+          onCamera: () {},
+          onVoice: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
 
-  @override
-  void dispose() {}
+    expect(find.byKey(const ValueKey("lumo-screen")), findsOneWidget);
+    expect(find.text("Respuestas fijas · datos locales"), findsOneWidget);
+    await tester.enterText(
+      find.byType(TextField).last,
+      "¿Cuánto vendí hoy?",
+    );
+    await tester.tap(find.byTooltip("Enviar"));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
+
+    expect(store.chat.last.text, contains(r"$2,430"));
+    expect(find.textContaining(r"$2,430"), findsWidgets);
+    store.dispose();
+    await tester.binding.setSurfaceSize(null);
+  });
 }

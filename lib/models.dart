@@ -1,7 +1,5 @@
 enum PaymentMethod { efectivo, tarjeta, transferencia, combinado }
 
-enum AiProviderChoice { automatic, openai, deepseek }
-
 class BusinessProfile {
   const BusinessProfile({
     required this.ownerName,
@@ -87,8 +85,6 @@ class ChatMessage {
     this.sale,
     this.items = const [],
     this.productId,
-    this.aiProvider,
-    this.aiModel,
     this.confirmed = false,
   });
 
@@ -98,8 +94,6 @@ class ChatMessage {
   final Sale? sale;
   final List<String> items;
   final String? productId;
-  final String? aiProvider;
-  final String? aiModel;
   bool confirmed;
 }
 
@@ -149,4 +143,11 @@ class ShoppingEntry {
   double quantity;
   final String reason;
   bool selected;
+}
+
+class CartItem {
+  CartItem({required this.productId, required this.quantity});
+
+  final String productId;
+  double quantity;
 }

@@ -15,8 +15,8 @@ SQLite local ── cola de cambios ── API de sincronización
                               Base de datos remota
 ```
 
-El backend actual de IA puede continuar separado inicialmente. Las claves de
-OpenAI y DeepSeek permanecen únicamente en el servidor.
+La futura API será únicamente de datos y sincronización. El asistente de
+respuestas fijas continuará funcionando localmente aunque no exista conexión.
 
 ## Cambios de datos necesarios
 
@@ -66,7 +66,7 @@ cambios posteriores al último cursor confirmado.
 - HTTPS obligatorio.
 - Tokens cortos en almacenamiento seguro del sistema, no en SQLite.
 - Autorización validada en cada endpoint.
-- Las claves de proveedores de IA nunca viajan al teléfono.
+- Ningún secreto del servidor se guarda en SQLite ni dentro del APK.
 
 ## Orden de implementación
 

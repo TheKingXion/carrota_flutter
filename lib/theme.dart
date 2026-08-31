@@ -27,16 +27,18 @@ ThemeData buildTheme() {
     splashFactory: InkSparkle.splashFactory,
     textTheme: const TextTheme(
       headlineLarge: TextStyle(
-          fontSize: 29,
-          height: 1.08,
-          fontWeight: FontWeight.w800,
-          letterSpacing: -0.8,
+          fontFamily: "serif",
+          fontSize: 32,
+          height: 1.04,
+          fontWeight: FontWeight.w600,
+          letterSpacing: -0.9,
           color: ink),
       headlineMedium: TextStyle(
-          fontSize: 23,
-          height: 1.12,
-          fontWeight: FontWeight.w800,
-          letterSpacing: -0.5,
+          fontFamily: "serif",
+          fontSize: 26,
+          height: 1.08,
+          fontWeight: FontWeight.w600,
+          letterSpacing: -0.6,
           color: ink),
       titleMedium:
           TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: ink),
@@ -56,7 +58,7 @@ ThemeData buildTheme() {
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         side: const BorderSide(color: hairline),
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(20),
       ),
     ),
     navigationBarTheme: const NavigationBarThemeData(
@@ -76,6 +78,14 @@ ThemeData buildTheme() {
       focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(18),
           borderSide: const BorderSide(color: primary, width: 1.5)),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        backgroundColor: primary,
+        foregroundColor: Colors.white,
+        shape: const StadiumBorder(),
+        textStyle: const TextStyle(fontWeight: FontWeight.w800),
+      ),
     ),
   );
 }

@@ -9,9 +9,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  http: ^1.6.0
   path: ^1.9.1
   sqflite: ^2.4.3
+  video_player: ^2.14.0
+  share_plus: ^13.3.0
 
 dev_dependencies:
   flutter_test:
@@ -20,3 +21,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/videos/lettuce.mp4
+    - assets/videos/apples.mp4
+    - assets/videos/fresh_fruit.mp4
+    - assets/videos/lemons.mp4
+    - assets/videos/citrus.mp4
