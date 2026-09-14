@@ -22,6 +22,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
+    - assets/posters/
     - assets/videos/lettuce.mp4
     - assets/videos/apples.mp4
     - assets/videos/fresh_fruit.mp4

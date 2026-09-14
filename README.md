@@ -85,39 +85,25 @@ SQLite crea `carrota_local.db` dentro del directorio privado de la app. Guarda:
 Los datos sobreviven al cierre, reinicio y actualización. Android los elimina
 si desinstalas la app o usas “Borrar datos”.
 
-## Ejecutar
+## Ejecutar y verificar
 
-```powershell
-cd "C:\Users\Xion\Desktop\folders\Juan Proyectos\carrota_flutter"
+Android es la plataforma principal de la demo con reproducción y persistencia SQLite. Desde una carpeta **local**, con Flutter y el SDK Android instalados:
+
+```bash
 flutter pub get
-flutter run -d windows
-```
-
-Para ejecutar posteriormente en un teléfono conectado:
-
-```powershell
 flutter devices
-flutter run -d "ID_DEL_TELEFONO"
-```
-
-## Compilar APK sin instalar
-
-```powershell
+flutter run --profile -d "ID_DEL_TELEFONO"
+flutter analyze
+flutter test --coverage
 flutter build apk --debug
 ```
 
-Resultado:
+La versión web permite revisar la interfaz y los videos, pero esta implementación de SQLite no guarda datos en el navegador. El reproductor declarado tampoco incluye una implementación nativa para Windows.
 
-```text
-build\app\outputs\flutter-apk\app-debug.apk
-```
+El feed sigue el dedo en ambos sentidos, prepara una ventana de hasta tres reproductores, limita a dos las cargas simultáneas para superar una precarga vecina lenta y conserva la posición al volver. Pausa durante el arrastre, al cambiar de sección, al abrir otra ruta o panel y al pasar a segundo plano. Incluye portadas de los clips, errores recuperables y controles de pausa/sonido.
 
-## Verificación
-
-```powershell
-flutter analyze
-flutter test
-```
+- [Guía de commit y push desde Git Bash](GUIA_GIT_BASH.md).
+- [Cambios, pruebas y límites de validación](INFORME_MEJORAS_Y_PRUEBAS.md).
 
 La integración remota futura está separada en `PLAN_API_SYNC.md`. El backend
 experimental de etapas anteriores no está conectado a esta versión de Flutter.

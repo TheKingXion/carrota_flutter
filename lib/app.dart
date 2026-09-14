@@ -102,30 +102,41 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       backgroundColor: desktopBackdrop,
       body: PhoneStage(
         child: Navigator(
+          observers: [feedRouteObserver],
           onGenerateRoute: (_) => MaterialPageRoute<void>(
             builder: (phoneContext) => AnimatedBuilder(
-              animation: Listenable.merge([store, tab]),
+              animation: tab,
               builder: (context, _) {
                 final pages = [
                   HomeScreen(
                     store: store,
+                    active: tab.value == 0,
                     onOpenProduct: (id) =>
                         showProductSheet(phoneContext, store, id),
                     onOpenDelivery: () =>
                         showDeliverySheet(phoneContext, store),
                     onOpenClosing: () => showClosingSheet(phoneContext, store),
                   ),
-                  TodayScreen(
-                    store: store,
-                    onOpenClosing: () => showClosingSheet(phoneContext, store),
+                  AnimatedBuilder(
+                    animation: store,
+                    builder: (context, _) => TodayScreen(
+                      store: store,
+                      onOpenClosing: () =>
+                          showClosingSheet(phoneContext, store),
+                    ),
                   ),
-                  MemoryScreen(store: store),
-                  BusinessScreen(
-                    store: store,
-                    onOpenProduct: (id) =>
-                        showProductSheet(phoneContext, store, id),
-                    onOpenShopping: () =>
-                        showShoppingSheet(phoneContext, store),
+                  AnimatedBuilder(
+                      animation: store,
+                      builder: (context, _) => MemoryScreen(store: store)),
+                  AnimatedBuilder(
+                    animation: store,
+                    builder: (context, _) => BusinessScreen(
+                      store: store,
+                      onOpenProduct: (id) =>
+                          showProductSheet(phoneContext, store, id),
+                      onOpenShopping: () =>
+                          showShoppingSheet(phoneContext, store),
+                    ),
                   ),
                 ];
 

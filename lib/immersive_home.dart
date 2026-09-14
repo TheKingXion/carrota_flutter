@@ -5,21 +5,28 @@ import "package:share_plus/share_plus.dart";
 import "package:video_player/video_player.dart";
 
 import "app_store.dart";
+import "feed_video_controller.dart";
 import "models.dart";
 import "sheets.dart";
 import "theme.dart";
 import "widgets.dart";
 
+final feedRouteObserver = RouteObserver<ModalRoute<dynamic>>();
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
     required this.store,
+    this.active = true,
+    this.videoControllerFactory,
     required this.onOpenProduct,
     required this.onOpenDelivery,
     required this.onOpenClosing,
   });
 
   final AppStore store;
+  final bool active;
+  final VideoPlayerController Function(String)? videoControllerFactory;
   final ValueChanged<String> onOpenProduct;
   final VoidCallback onOpenDelivery;
   final VoidCallback onOpenClosing;
@@ -28,7 +35,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen>
+    with WidgetsBindingObserver, RouteAware {
   static const _videoAssets = [
     "assets/videos/fresh_fruit.mp4",
     "assets/videos/lettuce.mp4",
@@ -38,11 +46,10 @@ class _HomeScreenState extends State<HomeScreen> {
   ];
 
   late final PageController _pageController;
-  final Map<int, VideoPlayerController> _videos = {};
-  final Set<int> _readyVideos = {};
-  final Set<int> _loadingVideos = {};
-  var _muted = true;
-  var _feedIndex = 0;
+  late final FeedVideoController _feed;
+  bool _foreground = true;
+  bool _routeVisible = true;
+  ModalRoute<dynamic>? _route;
   String? _addedProduct;
   Timer? _addedTimer;
 
@@ -52,105 +59,73 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _pageController = PageController();
-    unawaited(_prepareVideosAround(0));
+    _foreground = WidgetsBinding.instance.lifecycleState == null ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    WidgetsBinding.instance.addObserver(this);
+    _feed =
+        FeedVideoController(_videoAssets, create: widget.videoControllerFactory)
+          ..addListener(_refresh);
+    store.addListener(_refresh);
+    _updateActivity();
+    _feed.select(0);
   }
 
-  Future<void> _prepareVideosAround(int index) async {
-    final indexes = <int>{
-      if (index > 0) index - 1,
-      index,
-      if (index < _videoAssets.length - 1) index + 1,
-    };
-    await Future.wait(indexes.map(_initializeVideo));
-    if (mounted) _disposeDistantVideos(_feedIndex);
+  void _refresh() {
+    if (mounted) setState(() {});
   }
 
-  Future<void> _initializeVideo(int index) async {
-    if (index < 0 || index >= _videoAssets.length) return;
-    if (_videos.containsKey(index) || !_loadingVideos.add(index)) return;
-    final controller = VideoPlayerController.asset(
-      _videoAssets[index % _videoAssets.length],
-    );
-    _videos[index] = controller;
-    try {
-      await controller.initialize();
-      await controller.setLooping(true);
-      await controller.setVolume(_muted ? 0 : 1);
-      if (!mounted || _videos[index] != controller) {
-        await controller.dispose();
-        return;
-      }
-      _readyVideos.add(index);
-      if (index == _feedIndex) {
-        await controller.play();
-      } else {
-        await controller.pause();
-      }
-      if (mounted) setState(() {});
-    } catch (_) {
-      if (_videos[index] == controller) {
-        _videos.remove(index);
-        _readyVideos.remove(index);
-      }
-      await controller.dispose();
-    } finally {
-      _loadingVideos.remove(index);
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != _route) {
+      feedRouteObserver.unsubscribe(this);
+      _route = route;
+      if (route != null) feedRouteObserver.subscribe(this, route);
     }
   }
 
-  void _disposeDistantVideos(int center) {
-    final distant = _videos.keys
-        .where(
-          (index) =>
-              (index - center).abs() > 1 && !_loadingVideos.contains(index),
-        )
-        .toList();
-    for (final index in distant) {
-      final controller = _videos.remove(index);
-      _readyVideos.remove(index);
-      if (controller != null) unawaited(controller.dispose());
+  @override
+  void didUpdateWidget(covariant HomeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.store != store) {
+      oldWidget.store.removeListener(_refresh);
+      store.addListener(_refresh);
     }
+    _updateActivity();
   }
 
-  void _onPageChanged(int index) {
-    setState(() => _feedIndex = index);
-    for (final entry in _videos.entries) {
-      if (!_readyVideos.contains(entry.key)) continue;
-      if (entry.key == index) {
-        unawaited(entry.value.play());
-      } else {
-        unawaited(entry.value.pause());
-      }
-    }
-    unawaited(_prepareVideosAround(index));
+  void _updateActivity() =>
+      _feed.setActive(widget.active && _foreground && _routeVisible);
+
+  @override
+  void didPushNext() {
+    _routeVisible = false;
+    _updateActivity();
+  }
+
+  @override
+  void didPopNext() {
+    _routeVisible = true;
+    _updateActivity();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
+    _updateActivity();
   }
 
   @override
   void dispose() {
+    feedRouteObserver.unsubscribe(this);
+    WidgetsBinding.instance.removeObserver(this);
+    store.removeListener(_refresh);
     _addedTimer?.cancel();
     _pageController.dispose();
-    for (final controller in _videos.values) {
-      unawaited(controller.dispose());
-    }
-    _videos.clear();
+    _feed.removeListener(_refresh);
+    _feed.dispose();
     super.dispose();
-  }
-
-  Future<void> _toggleMute() async {
-    _muted = !_muted;
-    await Future.wait(
-      _videos.entries
-          .where((entry) => _readyVideos.contains(entry.key))
-          .map((entry) => entry.value.setVolume(_muted ? 0 : 1)),
-    );
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _togglePlayback() async {
-    final video = _videos[_feedIndex];
-    if (!_readyVideos.contains(_feedIndex) || video == null) return;
-    video.value.isPlaying ? await video.pause() : await video.play();
-    if (mounted) setState(() {});
   }
 
   void _addToCart(Product product) {
@@ -168,84 +143,15 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  Future<void> _showComments(
-    BuildContext context,
-    Product product,
-  ) async {
-    final controller = TextEditingController();
-    final comments = store.feedCommentsFor(product.id);
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      constraints: const BoxConstraints(maxWidth: 430),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (context) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 14, 18, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 42,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: hairline,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                "Comentarios de ${product.name} (${comments.length})",
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 12),
-              ...comments.reversed.take(5).map(
-                    (comment) => ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const CircleAvatar(
-                        backgroundColor: primarySoft,
-                        child: Icon(Icons.person_rounded, color: primary),
-                      ),
-                      title: const Text("Cliente demo"),
-                      subtitle: Text(comment),
-                    ),
-                  ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: controller,
-                      decoration: const InputDecoration(
-                        hintText: "Añadir comentario…",
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton.filled(
-                    tooltip: "Publicar",
-                    onPressed: () {
-                      if (controller.text.trim().isEmpty) return;
-                      store.addFeedComment(product.id, controller.text);
-                      Navigator.pop(context);
-                    },
-                    icon: const Icon(Icons.arrow_upward_rounded),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-    controller.dispose();
-  }
+  Future<void> _showComments(BuildContext context, Product product) =>
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        constraints: const BoxConstraints(maxWidth: 430),
+        shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+        builder: (_) => _FeedCommentsSheet(store: store, product: product),
+      );
 
   Future<void> _share(BuildContext context, Product product) async {
     final box = context.findRenderObject() as RenderBox?;
@@ -310,7 +216,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final feedProducts = store.products.take(5).toList();
+    final feedProducts = store.products.take(_videoAssets.length).toList();
 
     return Material(
       color: const Color(0xFF071711),
@@ -318,22 +224,40 @@ class _HomeScreenState extends State<HomeScreen> {
         bottom: false,
         child: Stack(
           children: [
-            PageView.builder(
-              key: const ValueKey("vertical-product-feed"),
-              controller: _pageController,
-              scrollDirection: Axis.vertical,
-              physics: const BouncingScrollPhysics(
-                parent: AlwaysScrollableScrollPhysics(),
+            if (feedProducts.isEmpty)
+              const Center(
+                  child: Text("Aún no hay productos",
+                      style: TextStyle(color: Colors.white)))
+            else
+              NotificationListener<ScrollNotification>(
+                onNotification: (notification) {
+                  if (notification.depth != 0) return false;
+                  if (notification is ScrollStartNotification) {
+                    _feed.setScrolling(true);
+                  }
+                  if (notification is ScrollEndNotification) {
+                    _feed.setScrolling(false);
+                  }
+                  return false;
+                },
+                child: PageView.builder(
+                  key: const ValueKey("vertical-product-feed"),
+                  controller: _pageController,
+                  scrollDirection: Axis.vertical,
+                  physics: const ClampingScrollPhysics(),
+                  itemCount: feedProducts.length,
+                  onPageChanged: _feed.select,
+                  itemBuilder: (context, index) => RepaintBoundary(
+                    key: ValueKey("feed-page-$index"),
+                    child: _buildFeedPage(
+                      context,
+                      product: feedProducts[index],
+                      index: index,
+                      total: feedProducts.length,
+                    ),
+                  ),
+                ),
               ),
-              itemCount: feedProducts.length,
-              onPageChanged: _onPageChanged,
-              itemBuilder: (context, index) => _buildFeedPage(
-                context,
-                product: feedProducts[index],
-                index: index,
-                total: feedProducts.length,
-              ),
-            ),
             Positioned(
               left: 14,
               right: 14,
@@ -404,267 +328,214 @@ class _HomeScreenState extends State<HomeScreen> {
     required int total,
   }) {
     final comments = store.feedCommentsFor(product.id);
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _togglePlayback,
-            child: _ImmersiveBackdrop(
-              controller: _videos[index],
-              ready: _readyVideos.contains(index),
-            ),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(22, 18, 72, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const LumoMark(size: 35),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
+    return LayoutBuilder(
+        builder: (context, constraints) => Stack(
+              children: [
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _feed.togglePlayback,
+                    child: _ImmersiveBackdrop(
+                      controller: _feed.player(index),
+                      ready: _feed.player(index) != null,
+                      failed: _feed.failed(index),
+                      paused: _feed.paused(index),
+                      onRetry: () => _feed.retry(index),
+                      poster: _videoAssets[index]
+                          .replaceFirst("videos/", "posters/")
+                          .replaceFirst(".mp4", ".jpg"),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 18,
+                  right: 74,
+                  top: 16,
+                  child: Row(children: [
+                    const LumoMark(size: 35),
+                    const SizedBox(width: 10),
+                    Expanded(
+                        child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          store.businessName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        Text(
-                          "${store.ownerName} · datos locales",
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Color(0xBFFFFFFF),
-                            fontSize: 11,
-                          ),
-                        ),
+                        Text(store.businessName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w800)),
+                        Text("${store.ownerName} · ${index + 1} de $total",
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 11)),
                       ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 104),
-              Text(
-                "Tu negocio,\nen movimiento.",
-                style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                      color: Colors.white,
-                      fontFamily: "serif",
-                      fontSize: 43,
-                      height: .98,
-                      letterSpacing: -1.5,
-                    ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                "${AppStore.money(store.salesToday)} hoy · "
-                "${store.operationsToday} operaciones",
-                style: const TextStyle(
-                  color: Color(0xDFFFFFFF),
-                  fontSize: 14,
+                    )),
+                  ]),
                 ),
-              ),
-              const SizedBox(height: 18),
-              _FocusCard(
-                product: product,
-                lowStock: product.stock <= product.averageDaily,
-                onDetails: () => widget.onOpenProduct(product.id),
-                onAdd: () => _addToCart(product),
-              ),
-              const SizedBox(height: 14),
-              Wrap(
-                spacing: 7,
-                runSpacing: 7,
-                children: [
-                  _QuickAction(
-                    label: "Alertas",
-                    onTap: () => _showAlerts(context),
-                  ),
-                  _QuickAction(
-                    label: "Recibir",
-                    onTap: widget.onOpenDelivery,
-                  ),
-                  _QuickAction(label: "Cierre", onTap: widget.onOpenClosing),
-                ],
-              ),
-            ],
-          ),
-        ),
-        Positioned(
-          right: 12,
-          bottom: 28,
-          child: Column(
-            children: [
-              _ImmersiveAction(
-                icon: store.isFeedLiked(product.id)
-                    ? Icons.favorite_rounded
-                    : Icons.favorite_border_rounded,
-                label: "${store.feedLikeCountFor(product.id)}",
-                active: store.isFeedLiked(product.id),
-                onTap: () => store.toggleFeedLike(product.id),
-              ),
-              const SizedBox(height: 14),
-              _ImmersiveAction(
-                icon: Icons.mode_comment_rounded,
-                label: "${comments.length}",
-                onTap: () => _showComments(context, product),
-              ),
-              const SizedBox(height: 14),
-              _ImmersiveAction(
-                icon: store.isFeedSaved(product.id)
-                    ? Icons.bookmark_rounded
-                    : Icons.bookmark_border_rounded,
-                label: "Guardar",
-                active: store.isFeedSaved(product.id),
-                onTap: () => store.toggleFeedSaved(product.id),
-              ),
-              const SizedBox(height: 14),
-              _CartAction(
-                count: store.cartItemCount,
-                onTap: () => showCartSheet(context, store),
-              ),
-              const SizedBox(height: 14),
-              _ImmersiveAction(
-                icon: Icons.arrow_outward_rounded,
-                label: "Compartir",
-                onTap: () => _share(context, product),
-              ),
-            ],
-          ),
-        ),
-        Positioned(
-          right: 12,
-          top: 12,
-          child: IconButton.filled(
-            tooltip: _muted ? "Activar sonido" : "Silenciar",
-            onPressed: _toggleMute,
-            style: IconButton.styleFrom(
-              backgroundColor: const Color(0x990B1510),
-              foregroundColor: Colors.white,
-            ),
-            icon: Icon(
-              _muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-            ),
-          ),
-        ),
-        Positioned(
-          left: 0,
-          right: 0,
-          top: 18,
-          child: IgnorePointer(
-            child: Center(
-              child: Text(
-                "${index + 1} / $total",
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ),
-        ),
-        Positioned(
-          left: 16,
-          bottom: 18,
-          child: _SwipeHint(index: index, total: total),
-        ),
-      ],
-    );
-  }
-}
-
-class _FocusCard extends StatelessWidget {
-  const _FocusCard({
-    required this.product,
-    required this.lowStock,
-    required this.onDetails,
-    required this.onAdd,
-  });
-
-  final Product product;
-  final bool lowStock;
-  final VoidCallback onDetails;
-  final VoidCallback onAdd;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.all(13),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x44000000),
-              blurRadius: 28,
-              offset: Offset(0, 12),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 50,
-              height: 50,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: primarySoft,
-                borderRadius: BorderRadius.circular(15),
-              ),
-              child: Text(product.emoji, style: const TextStyle(fontSize: 28)),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: InkWell(
-                borderRadius: BorderRadius.circular(12),
-                onTap: onDetails,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
+                Positioned(
+                  left: 18,
+                  right: 84,
+                  bottom: 64,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        product.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      if (constraints.maxHeight >= 640) ...[
+                        const Text("Tu negocio,\nen movimiento.",
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 28,
+                                height: 1.05,
+                                fontWeight: FontWeight.w800)),
+                        const SizedBox(height: 12),
+                      ],
+                      _FocusCard(
+                        product: product,
+                        lowStock: product.stock <= product.averageDaily,
+                        onDetails: () => widget.onOpenProduct(product.id),
+                        onAdd:
+                            product.stock - store.cartQuantityFor(product.id) >=
+                                    1
+                                ? () => _addToCart(product)
+                                : null,
                       ),
-                      Text(
-                        "${AppStore.money(product.price)} / ${product.unit}",
-                        style: const TextStyle(
-                          color: primary,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 12,
-                        ),
+                      const SizedBox(height: 10),
+                      Wrap(spacing: 6, runSpacing: 6, children: [
+                        _QuickAction(
+                            label: "Alertas",
+                            onTap: () => _showAlerts(context)),
+                        _QuickAction(
+                            label: "Recibir", onTap: widget.onOpenDelivery),
+                        _QuickAction(
+                            label: "Cierre", onTap: widget.onOpenClosing),
+                      ]),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  right: 12,
+                  bottom: 28,
+                  child: Column(
+                    children: [
+                      _ImmersiveAction(
+                        icon: store.isFeedLiked(product.id)
+                            ? Icons.favorite_rounded
+                            : Icons.favorite_border_rounded,
+                        label: "${store.feedLikeCountFor(product.id)}",
+                        active: store.isFeedLiked(product.id),
+                        onTap: () => store.toggleFeedLike(product.id),
                       ),
-                      Text(
-                        lowStock
-                            ? "Quedan ${AppStore.number(product.stock)} ${product.unit}"
-                            : "Toca para ver detalles",
-                        style: const TextStyle(color: mutedInk, fontSize: 10),
+                      const SizedBox(height: 14),
+                      _ImmersiveAction(
+                        icon: Icons.mode_comment_rounded,
+                        label: "${comments.length}",
+                        onTap: () => _showComments(context, product),
+                      ),
+                      const SizedBox(height: 14),
+                      _ImmersiveAction(
+                        icon: store.isFeedSaved(product.id)
+                            ? Icons.bookmark_rounded
+                            : Icons.bookmark_border_rounded,
+                        label: "Guardar",
+                        active: store.isFeedSaved(product.id),
+                        onTap: () => store.toggleFeedSaved(product.id),
+                      ),
+                      const SizedBox(height: 14),
+                      _CartAction(
+                        count: store.cartItemCount,
+                        onTap: () => showCartSheet(context, store),
+                      ),
+                      const SizedBox(height: 14),
+                      _ImmersiveAction(
+                        icon: Icons.arrow_outward_rounded,
+                        label: "Compartir",
+                        onTap: () => _share(context, product),
                       ),
                     ],
                   ),
                 ),
-              ),
+                Positioned(
+                  right: 12,
+                  top: 12,
+                  child: IconButton.filled(
+                    tooltip: _feed.muted ? "Activar sonido" : "Silenciar",
+                    onPressed: _feed.toggleMute,
+                    style: IconButton.styleFrom(
+                      backgroundColor: const Color(0x990B1510),
+                      foregroundColor: Colors.white,
+                    ),
+                    icon: Icon(
+                      _feed.muted
+                          ? Icons.volume_off_rounded
+                          : Icons.volume_up_rounded,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 16,
+                  bottom: 18,
+                  child: _SwipeHint(index: index, total: total),
+                ),
+              ],
+            ));
+  }
+}
+
+class _FocusCard extends StatelessWidget {
+  const _FocusCard(
+      {required this.product,
+      required this.lowStock,
+      required this.onDetails,
+      required this.onAdd});
+  final Product product;
+  final bool lowStock;
+  final VoidCallback onDetails;
+  final VoidCallback? onAdd;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            InkWell(
+              onTap: onDetails,
+              borderRadius: BorderRadius.circular(12),
+              child: Row(children: [
+                Text(product.emoji, style: const TextStyle(fontSize: 30)),
+                const SizedBox(width: 10),
+                Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Text(product.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w800)),
+                      Text("${AppStore.money(product.price)} / ${product.unit}",
+                          style: const TextStyle(
+                              color: primary,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 12)),
+                      Text(
+                          lowStock
+                              ? "Quedan ${AppStore.number(product.stock)} ${product.unit}"
+                              : "Ver detalles",
+                          style:
+                              const TextStyle(color: mutedInk, fontSize: 11)),
+                    ])),
+              ]),
             ),
-            FilledButton(
-              onPressed: onAdd,
-              style: FilledButton.styleFrom(
-                minimumSize: const Size(74, 38),
-                padding: const EdgeInsets.symmetric(horizontal: 13),
-              ),
-              child: const Text("Agregar"),
-            ),
-          ],
+            const SizedBox(height: 10),
+            SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: onAdd,
+                  child: Text(product.stock <= 0 ? "Agotado" : "Agregar"),
+                )),
+          ]),
         ),
       );
 }
@@ -673,10 +544,18 @@ class _ImmersiveBackdrop extends StatelessWidget {
   const _ImmersiveBackdrop({
     required this.controller,
     required this.ready,
+    required this.failed,
+    required this.paused,
+    required this.onRetry,
+    required this.poster,
   });
 
   final VideoPlayerController? controller;
+  final String poster;
   final bool ready;
+  final bool failed;
+  final bool paused;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) => Stack(
@@ -695,6 +574,11 @@ class _ImmersiveBackdrop extends StatelessWidget {
             ),
             child: SizedBox.expand(),
           ),
+          Positioned.fill(
+              child: Image.asset(poster,
+                  fit: BoxFit.cover,
+                  excludeFromSemantics: true,
+                  gaplessPlayback: true)),
           if (ready && controller != null)
             Positioned.fill(
               child: ClipRect(
@@ -734,6 +618,44 @@ class _ImmersiveBackdrop extends StatelessWidget {
             ),
             child: SizedBox.expand(),
           ),
+          if (!ready)
+            Positioned(
+              top: 72,
+              left: 18,
+              right: 84,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                    color: const Color(0xCC071711),
+                    borderRadius: BorderRadius.circular(16)),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Text(
+                        failed
+                            ? "No se pudo cargar el video"
+                            : "Preparando video…",
+                        maxLines: 2,
+                        textAlign: TextAlign.center,
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 12)),
+                    if (failed)
+                      TextButton.icon(
+                        onPressed: onRetry,
+                        icon: const Icon(Icons.refresh, color: Colors.white),
+                        label: const Text("Reintentar",
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style:
+                                TextStyle(color: Colors.white, fontSize: 12)),
+                      ),
+                  ]),
+                ),
+              ),
+            ),
+          if (ready && paused)
+            const Center(
+                child: Icon(Icons.play_circle_fill_rounded,
+                    size: 68, color: Colors.white70)),
         ],
       );
 }
@@ -811,14 +733,17 @@ class _SwipeHint extends StatelessWidget {
           children: [
             Icon(icon, color: Colors.white, size: 17),
             const SizedBox(width: 5),
-            Text(
+            Flexible(
+                child: Text(
               label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 10,
                 fontWeight: FontWeight.w700,
               ),
-            ),
+            )),
           ],
         ),
       ),
@@ -876,5 +801,74 @@ class _QuickAction extends StatelessWidget {
         backgroundColor: const Color(0x331F352B),
         labelStyle: const TextStyle(color: Colors.white, fontSize: 11),
         label: Text(label),
+      );
+}
+
+class _FeedCommentsSheet extends StatefulWidget {
+  const _FeedCommentsSheet({required this.store, required this.product});
+  final AppStore store;
+  final Product product;
+  @override
+  State<_FeedCommentsSheet> createState() => _FeedCommentsSheetState();
+}
+
+class _FeedCommentsSheetState extends State<_FeedCommentsSheet> {
+  final _text = TextEditingController();
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (_text.text.trim().isEmpty) return;
+    widget.store.addFeedComment(widget.product.id, _text.text);
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(
+              18, 16, 18, 24 + MediaQuery.viewInsetsOf(context).bottom),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text("Comentarios de ${widget.product.name}",
+                  style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 12),
+              if (widget.store.feedCommentsFor(widget.product.id).isEmpty)
+                const Padding(
+                    padding: EdgeInsets.only(bottom: 12),
+                    child: Text("Sé el primero en comentar.")),
+              ...widget.store
+                  .feedCommentsFor(widget.product.id)
+                  .reversed
+                  .take(5)
+                  .map((comment) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading:
+                          const CircleAvatar(child: Icon(Icons.person_rounded)),
+                      title: const Text("Cliente demo"),
+                      subtitle: Text(comment))),
+              Row(children: [
+                Expanded(
+                    child: TextField(
+                        controller: _text,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => _submit(),
+                        decoration: const InputDecoration(
+                            hintText: "Añadir comentario…"))),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                    tooltip: "Publicar",
+                    onPressed: _submit,
+                    icon: const Icon(Icons.arrow_upward_rounded)),
+              ]),
+            ],
+          ),
+        ),
       );
 }

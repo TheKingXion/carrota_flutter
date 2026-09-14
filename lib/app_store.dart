@@ -654,7 +654,7 @@ class AppStore extends ChangeNotifier {
 
   bool addToCart(String productId, {double quantity = 1}) {
     final product = productById(productId);
-    if (product == null || quantity <= 0) return false;
+    if (product == null || !quantity.isFinite || quantity <= 0) return false;
     final next = cartQuantityFor(productId) + quantity;
     if (next > product.stock) return false;
     for (final item in cart) {
@@ -670,6 +670,7 @@ class AppStore extends ChangeNotifier {
   }
 
   bool updateCartQuantity(String productId, double quantity) {
+    if (!quantity.isFinite) return false;
     if (quantity <= 0) {
       removeFromCart(productId);
       return true;
@@ -701,7 +702,12 @@ class AppStore extends ChangeNotifier {
     if (cart.isEmpty) return null;
     for (final item in cart) {
       final product = productById(item.productId);
-      if (product == null || item.quantity > product.stock) return null;
+      if (product == null ||
+          !item.quantity.isFinite ||
+          item.quantity <= 0 ||
+          item.quantity > product.stock) {
+        return null;
+      }
     }
 
     final lines = cart
